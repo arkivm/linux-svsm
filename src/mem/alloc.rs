@@ -5,6 +5,7 @@
  * Author: Joerg Roedel <jroedel@suse.de>
  */
 
+use crate::prints;
 use crate::cpu::vc_early_make_pages_private;
 use crate::dyn_mem_begin;
 use crate::dyn_mem_end;
@@ -30,7 +31,7 @@ pub const REAL_MAX_ORDER: usize = 52;
 // Maximum allocation size is (2^MAX_ORDER)*PAGE_SIZE
 // Currently 128 KiB
 /// 6
-pub const MAX_ORDER: usize = 6;
+pub const MAX_ORDER: usize = 10;
 
 impl PageStorageType {
     pub const fn new(t: u64) -> Self {
@@ -358,7 +359,7 @@ impl MemoryRegion {
         self.split_page(pfn, order + 1)
     }
 
-    pub fn allocate_pages(&mut self, order: usize) -> Result<VirtAddr, ()> {
+    fn allocate_pages(&mut self, order: usize) -> Result<VirtAddr, ()> {
         if order >= MAX_ORDER {
             return Err(());
         }
@@ -373,11 +374,11 @@ impl MemoryRegion {
         }
     }
 
-    pub fn allocate_page(&mut self) -> Result<VirtAddr, ()> {
+    fn allocate_page(&mut self) -> Result<VirtAddr, ()> {
         self.allocate_pages(0)
     }
 
-    pub fn allocate_slab_page(&mut self, slab: VirtAddr) -> Result<VirtAddr, ()> {
+    fn allocate_slab_page(&mut self, slab: VirtAddr) -> Result<VirtAddr, ()> {
         self.refill_page_list(0)?;
         if let Ok(pfn) = self.get_next_page(0) {
             assert!(slab.as_u64() & PAGE_TYPE_MASK == 0);
@@ -615,6 +616,7 @@ pub fn mem_free(va: VirtAddr) {
 
 /// Persistent dynamic allocation of variable size
 pub fn mem_allocate(size: usize) -> Result<VirtAddr, ()> {
+    prints!("alloc size {}\n", size);
     unsafe { ALLOCATOR.slab_alloc(size) }
 }
 
@@ -1027,6 +1029,7 @@ impl SvsmAllocator {
         } else {
             let order: usize = SvsmAllocator::get_order(size);
             if order < MAX_ORDER {
+                //while (true)  {}
                 ret = allocate_pages(order);
             } else {
                 ret = Err(());
@@ -1072,7 +1075,10 @@ unsafe impl GlobalAlloc for SvsmAllocator {
         result = self.slab_alloc(size);
         match result {
             Ok(r) => ret = r.as_u64() as *mut u8,
-            Err(_) => ret = ptr::null_mut(),
+            Err(_) => ret = {
+                prints!("alloc failed\n");
+                ptr::null_mut()
+            },
         }
 
         ret
@@ -1107,6 +1113,32 @@ fn root_mem_init(pstart: PhysAddr, vstart: VirtAddr, page_count: usize) {
         panic!("Failed to initialize SLAB_PAGE_SLAB");
     }
 }
+
+pub fn sizeof_alloc(ptr: *mut u8) -> usize {
+        // Get the memory size allocated to ptr
+        let ptr_size: usize;
+        let virt_addr: VirtAddr = VirtAddr::new(ptr as u64);
+        let result: Result<SvsmPageInfo, ()> = ROOT_MEM.lock().get_page_info(virt_addr);
+        if let Err(_e) = result {
+            panic!("sizeof_alloc: unknown memory");
+        }
+        let info: SvsmPageInfo = result.unwrap();
+        match info {
+            SvsmPageInfo::Allocated(ai) => {
+                ptr_size = (ai.order as u64 * PAGE_SIZE) as usize;
+            }
+            SvsmPageInfo::SlabPage(si) => {
+                let slab: *mut Slab = si.slab.as_u64() as *mut Slab;
+                ptr_size = unsafe { (*slab).item_size as usize }
+            }
+            _ => {
+                panic!("sizeof_alloc: unsupported page type");
+            }
+        }
+        prints!("size of alloc {}", ptr_size);
+        ptr_size
+    }
+
 
 unsafe fn __mem_init() {
     let mem_begin: PhysFrame = PhysFrame::containing_address(PhysAddr::new(dyn_mem_begin));

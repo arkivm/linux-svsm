@@ -2,7 +2,7 @@
 
 GCC		= gcc
 
-SHELL		:= /bin/bash
+#SHELL		:= /bin/bash
 
 A_FLAGS		:= -D__ASSEMBLY__
 
@@ -17,24 +17,28 @@ LD_FLAGS	+= -nostdlib
 LD_FLAGS	+= -Wl,-Tsrc/start/svsm.lds -Wl,--build-id=none
 
 TARGET_DIR	:= target
-TARGET		:= $(TARGET_DIR)/svsm-target/debug
+TARGET		:= $(TARGET_DIR)/x86_64-unknown-none/debug
+
+#STATIC_LIBS	:= $(addprefix external/build/lib/, libtpm.a libplatform.a libwolfssl.a libcrt.a libm.a)
+STATIC_LIBS	:= $(addprefix external/build/lib/, libcrt.a libwolfssl.a libm.a )
 
 OBJS		:= src/start/start.o
-OBJS		+= $(TARGET)/liblinux_svsm.a
+#OBJS		+= $(TARGET)/liblinux_svsm.a
+
 
 FEATURES	:= ""
 
 ## Memory layout
 
 SVSM_GPA	:= 0x8000000000
-SVSM_MEM	:= 0x10000000
+SVSM_MEM	:= 0x20000000
 LDS_FLAGS	:= -DSVSM_GPA_LDS="$(SVSM_GPA)"
 LDS_FLAGS	+= -DSVSM_GPA="$(SVSM_GPA)ULL"
 LDS_FLAGS	+= -DSVSM_MEM="$(SVSM_MEM)ULL"
 
 .PHONY: all doc prereq clean superclean
 
-all: .prereq svsm.bin
+all: .prereq .WAIT svsm.bin
 
 doc: .prereq
 	cargo doc --open
@@ -43,7 +47,8 @@ svsm.bin: svsm.bin.elf
 	objcopy -g -O binary $< $@
 
 svsm.bin.elf: $(OBJS) src/start/svsm.lds
-	$(GCC) $(LD_FLAGS) -o $@ $(OBJS)
+	@xargo build
+	$(GCC) $(LD_FLAGS) -o $@ $(OBJS) -Wl,--start-group $(TARGET)/liblinux_svsm.a $(STATIC_LIBS) -Wl,--end-group
 
 %.a: src/*.rs src/cpu/*.rs src/mem/*.rs src/util/*.rs
 	@xargo build --features $(FEATURES)

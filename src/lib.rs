@@ -18,6 +18,8 @@
 // overwrite _start().
 #![no_main]
 
+
+pub mod bindings;
 /// Initialize BIOS for the guest
 pub mod bios;
 /// Prepare and start SMP
@@ -31,6 +33,9 @@ pub mod svsm_request;
 /// Auxiliary functions and macros
 pub mod util;
 
+pub mod wrapper;
+
+
 extern crate alloc;
 
 use crate::bios::start_bios;
@@ -41,6 +46,7 @@ use crate::mem::*;
 use crate::svsm_request::svsm_request_loop;
 use crate::util::*;
 use crate::vmsa::*;
+use crate::wrapper::*;
 
 use core::panic::PanicInfo;
 
@@ -170,6 +176,10 @@ pub extern "C" fn svsm_main() -> ! {
 
     // Load BIOS
     start_bios();
+
+    //wrapper_init();
+
+    get_attestation_report();
 
     // Start taking requests from guest in this vCPU
     svsm_request_loop();

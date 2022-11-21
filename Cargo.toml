@@ -2,6 +2,7 @@
 crate-type = ["staticlib"]
 
 [features]
+default = [ "verbose" ]
 
 verbose = [] # Print updates on serial (demo and debug purposes)
 
@@ -19,6 +20,16 @@ memoffset = "0.6"
 paste = "1.0"
 memchr = { version = "2", default-features = false }
 uuid = { version = "1", default-features = false }
+
+# for TPM register space
+tock-registers = "0.8.0"
+# Hashmap for malloc/free
+hashbrown = "0.12.3"
+# ctypes for bindgen/no_std
+cty = "0.2.2"
+
+[build-dependencies]
+bindgen = "0.60.1"
 
 [dependencies.lazy_static]
 version = "1.0"

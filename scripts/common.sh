@@ -105,7 +105,7 @@ build_install_ovmf()
 	fi
 
 	# captures all the OVMF debug messages on qemu serial log. remove -DDEBUG_ON_SERIAL_PORT to disable it.
-	BUILD_CMD="nice build -q --cmd-len=64436 -DDEBUG_ON_SERIAL_PORT -n $(getconf _NPROCESSORS_ONLN) ${GCCVERS:+-t $GCCVERS} -a X64 -p OvmfPkg/OvmfPkgX64.dsc"
+	BUILD_CMD="nice build -q --cmd-len=64436 -b RELEASE -n $(getconf _NPROCESSORS_ONLN) ${GCCVERS:+-t $GCCVERS} -a X64 -p OvmfPkg/OvmfPkgX64.dsc"
 
 	[ -d ovmf ] || {
 		run_cmd git clone --single-branch -b ${OVMF_BRANCH} ${OVMF_GIT_URL} ovmf
@@ -121,8 +121,8 @@ build_install_ovmf()
 		run_cmd $BUILD_CMD
 
 		mkdir -p $DEST
-		run_cmd cp -f Build/OvmfX64/DEBUG_$GCCVERS/FV/OVMF_CODE.fd $DEST
-		run_cmd cp -f Build/OvmfX64/DEBUG_$GCCVERS/FV/OVMF_VARS.fd $DEST
+		run_cmd cp -f Build/OvmfX64/RELEASE_$GCCVERS/FV/OVMF_CODE.fd $DEST
+		run_cmd cp -f Build/OvmfX64/RELEASE_$GCCVERS/FV/OVMF_VARS.fd $DEST
 	popd >/dev/null
 }
 
