@@ -5,12 +5,12 @@
  * Author: Joerg Roedel <jroedel@suse.de>
  */
 
-use crate::prints;
 use crate::cpu::vc_early_make_pages_private;
 use crate::dyn_mem_begin;
 use crate::dyn_mem_end;
 use crate::globals::*;
 use crate::mem::{pgtable_pa_to_va, pgtable_va_to_pa};
+use crate::prints;
 use crate::util::locking::SpinLock;
 use crate::STATIC_ASSERT;
 use core::alloc::{GlobalAlloc, Layout};
@@ -1075,10 +1075,12 @@ unsafe impl GlobalAlloc for SvsmAllocator {
         result = self.slab_alloc(size);
         match result {
             Ok(r) => ret = r.as_u64() as *mut u8,
-            Err(_) => ret = {
-                prints!("alloc failed\n");
-                ptr::null_mut()
-            },
+            Err(_) => {
+                ret = {
+                    prints!("alloc failed\n");
+                    ptr::null_mut()
+                }
+            }
         }
 
         ret

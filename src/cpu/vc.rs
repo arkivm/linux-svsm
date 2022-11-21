@@ -1011,10 +1011,10 @@ pub fn vc_init() {
     vc_register_ghcb(ghcb);
 }
 
-
+use crate::bios::SnpSecrets;
+use crate::util::locking::SpinLock;
 use bindings::*;
 use core::mem::MaybeUninit;
-use crate::util::locking::SpinLock;
 use lazy_static::lazy_static;
 
 lazy_static! {
@@ -1022,7 +1022,6 @@ lazy_static! {
 }
 
 pub fn get_attestation_report() {
-
     prints!("Trying to get attestation report\n");
 
     let seq_num = match SEQ_NUM.lock().checked_add(1) {
@@ -1030,17 +1029,20 @@ pub fn get_attestation_report() {
         None => 0,
     };
 
-
     let mut req = unsafe { MaybeUninit::<snp_report_req>::zeroed().assume_init() };
     let mut msg = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
     let mut msg_resp = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
 
-    //req.user_data = [0xff; 64];
+    // request for VMPL level
     req.vmpl = 2;
+
     let report_req_sz = core::mem::size_of::<snp_report_req>() as u16;
 
     let mut hdr: &mut snp_guest_msg_hdr = &mut msg.hdr;
 
+    // Populate message headers
+    // https://www.amd.com/system/files/TechDocs/56860.pdf - Table. 97
+    // https://github.com/AMDESE/linux/blob/3f7b2e900f5842ccc42444a5973e00d49dd8fc96/drivers/virt/coco/sevguest/sevguest.c#L287
     hdr.algo = aead_algo_SNP_AEAD_AES_256_GCM as u8;
     hdr.hdr_version = MSG_HDR_VER as u8;
     hdr.hdr_sz = core::mem::size_of::<snp_guest_msg_hdr>() as u16;
@@ -1051,19 +1053,16 @@ pub fn get_attestation_report() {
     hdr.msg_sz = report_req_sz;
 
     unsafe {
-        let mut enc: Aes = MaybeUninit::uninit().assume_init();
+        let mut enc: Aes = MaybeUninit::zeroed().assume_init();
 
         let mut ret = wc_AesInit(&mut enc, core::ptr::null_mut(), INVALID_DEVID);
 
-        if ret != 0 {
-            prints!("Aes init failed\n");
-        }
+        assert_eq!(ret, 0, "Aes Init failed with ret {}", ret);
 
         let svsm_secrets_va = pgtable_pa_to_va(PhysAddr::new(svsm_secrets_page));
-        use crate::bios::SnpSecrets;
         let svsm_secrets: *const SnpSecrets = svsm_secrets_va.as_ptr();
 
-        let vmpck0_key = *(&(*svsm_secrets).vmpck0 as *const [u8; 32]);
+        let _vmpck0_key = *(&(*svsm_secrets).vmpck0 as *const [u8; 32]);
 
         //prints!("{:#?}\n", vmpck0_key);
 
@@ -1073,54 +1072,54 @@ pub fn get_attestation_report() {
             32,
         );
 
-        if ret != 0 {
-            prints!("AesGcmSetKey failed");
-        }
+        assert_eq!(ret, 0, "AesGcmSetKey failed with ret {}", ret);
 
         // 16 bytes IV
         let mut iv = [0u64; 2];
         iv[0] = seq_num;
 
         let mut auth_tag = [0u8; AES_BLOCK_SIZE as usize];
-        //let mut auth_tag = [0u8; AES_BLOCK_SIZE as usize];
 
         let mut aad = [0u8; AAD_LEN as usize];
 
-        core::ptr::copy_nonoverlapping(&hdr.algo as *const _ as *const u8,
-                                        &mut aad as *mut _ as *mut u8,
-                                        AAD_LEN as usize);
+        // We authenticate the header from algo
+        // AMD says from 0x20 to 0x5F (https://www.amd.com/system/files/TechDocs/56860.pdf Table 97
+        // The kernel authenticates from 0x30 to 0x5F
+        // https://github.com/AMDESE/linux/blob/3f7b2e900f5842ccc42444a5973e00d49dd8fc96/drivers/virt/coco/sevguest/sevguest.c#L203
+        core::ptr::copy_nonoverlapping(
+            &hdr.algo as *const _ as *const u8,
+            &mut aad as *mut _ as *mut u8,
+            AAD_LEN as usize,
+        );
 
         //prints!("AAD {:#?}\n", aad);
 
-        ret = wc_AesGcmEncrypt(&mut enc,
-                                  &mut msg.payload as *mut _ as *mut u8, // [out] cipher text
-                                  &req as *const _ as *const u8,         // [in] plain text
-                                  report_req_sz as u32,                  // plain text size
-                                  &mut iv as *mut _ as *mut u8,          // iv
-                                  core::mem::size_of::<[u64; 2]>() as u32,  // sizeof(iv)
-                                  &mut auth_tag as *mut u8,                 // authtag
-                                  core::mem::size_of::<[u8; AES_BLOCK_SIZE as usize]>() as u32, // sizeof authtag
-                                  &mut aad as *const u8,                    // aad
-                                  core::mem::size_of::<[u8; AAD_LEN as usize]>() as u32,  // sizeof(aad)
-                                  );
+        let ret = wc_AesGcmEncrypt(
+            &mut enc,
+            &mut msg.payload as *mut _ as *mut u8, // [out] cipher text
+            &req as *const _ as *const u8,         // [in] plain text
+            report_req_sz as u32,                  // plain text size
+            &mut iv as *mut _ as *mut u8,          // iv
+            core::mem::size_of::<[u64; 2]>() as u32, // sizeof(iv)
+            &mut auth_tag as *mut u8,              // authtag
+            core::mem::size_of::<[u8; AES_BLOCK_SIZE as usize]>() as u32, // sizeof authtag
+            &mut aad as *const u8,                 // aad
+            core::mem::size_of::<[u8; AAD_LEN as usize]>() as u32, // sizeof(aad)
+        );
 
-        if ret != 0 {
-            prints!("AesGcmEncrypt returned {}", ret);
-            while true {}
-        }
+        assert_eq!(ret, 0, "AesGcmEncrypt failed with {}", ret);
 
-        core::ptr::copy_nonoverlapping(&auth_tag as *const _ as *const u8,
-                                        &mut msg.hdr.authtag as *mut _ as *mut u8,
-                                        AES_BLOCK_SIZE as usize);
+        // copyt the authtag to header
+        core::ptr::copy_nonoverlapping(
+            &auth_tag as *const _ as *const u8,
+            &mut msg.hdr.authtag as *mut _ as *mut u8,
+            AES_BLOCK_SIZE as usize,
+        );
 
         let hdr: &snp_guest_msg_hdr = &msg.hdr;
-        //let enc_payload = msg.payload;
 
-        //prints!("ret {}\n", ret);
         prints!("hdr {:#x?}\n", hdr);
 
-
-        use x86_64::structures::paging::frame::PhysFrame;
         let ghcb: *mut Ghcb = vc_get_ghcb();
 
         let req_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg as *const _);
@@ -1129,12 +1128,16 @@ pub fn get_attestation_report() {
         let req_pa: PhysAddr = pgtable_va_to_pa(req_va);
         let resp_pa: PhysAddr = pgtable_va_to_pa(resp_va);
 
+        // From §4.1.7, https://developer.amd.com/wp-content/resources/56421.pdf
+        // make both the request and response page as shared
         pgtable_make_pages_shared(req_va, 4096);
         pgtable_make_pages_shared(resp_va, 4096);
 
-        vc_perform_vmgexit(ghcb, GHCB_GUEST_REQUEST, req_pa.as_u64(),
-                    resp_pa.as_u64());
+        // perform guest request 0x80000011
+        vc_perform_vmgexit(ghcb, GHCB_GUEST_REQUEST, req_pa.as_u64(), resp_pa.as_u64());
 
+        // if sw_exit_info_2 is non-zero, interpret error code from
+        // https://www.amd.com/system/files/TechDocs/56860.pdf Table 100
         if !(*ghcb).is_sw_exit_info_2_valid() || (*ghcb).sw_exit_info_2() != 0 {
             let ret = (*ghcb).sw_exit_info_2();
             prints!("Failed! ret code {:x}\n", ret);
@@ -1142,10 +1145,10 @@ pub fn get_attestation_report() {
             //prints!("resp {:#x?}\n", msg_resp);
             //vc_terminate_unhandled_vc();
         }
+
         // TODO:
-        // enc payload using wc_AesGcmEncrypt
-        // communicate input/output over ghcb
-        // dec the payload using wc_AesGcmDecrypt
-        //while true {} 
+        // - Decrypt the payload
+        // - Parse the attestation report
+        // - Save it to a _defined_ nvindex in the TPM's NVRAM
     }
 }

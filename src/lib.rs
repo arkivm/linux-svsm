@@ -35,7 +35,6 @@ pub mod util;
 
 pub mod wrapper;
 
-
 extern crate alloc;
 
 use crate::bios::start_bios;
