@@ -1,0 +1,20 @@
+[submodule "libcrt"]
+	path = libcrt
+	url = git@github.com:arkivm/libcrt.git
+	branch = master
+[submodule "external/libm"]
+	path = external/libm
+	url = git@github.com:arkivm/libm.git
+	branch = master
+[submodule "external/libcrt"]
+	path = external/libcrt
+	url = git@github.com:arkivm/libcrt.git
+	branch = master
+[submodule "external/wolfssl"]
+	path = external/wolfssl
+	url = git@github.com:arkivm/wolfssl.git
+	branch = svsm-vtpm-0.1
+[submodule "external/ms-tpm-20-ref"]
+	path = external/ms-tpm-20-ref
+	url = git@github.com:arkivm/ms-tpm-20-ref.git
+	branch = svsm-vtpm-0.1
