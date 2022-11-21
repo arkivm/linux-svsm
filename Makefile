@@ -15,6 +15,7 @@ C_FLAGS		+= -Wall -Wstrict-prototypes -Wno-address-of-packed-member
 LD_FLAGS	:= -m64
 LD_FLAGS	+= -nostdlib
 LD_FLAGS	+= -Wl,-Tsrc/start/svsm.lds -Wl,--build-id=none
+LD_FLAGS	+= -z noexecstack
 
 TARGET_DIR	:= target
 TARGET		:= $(TARGET_DIR)/svsm-target/debug
