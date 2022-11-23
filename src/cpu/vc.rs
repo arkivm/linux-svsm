@@ -1014,11 +1014,148 @@ pub fn vc_init() {
 use crate::bios::SnpSecrets;
 use crate::util::locking::SpinLock;
 use bindings::*;
+use core::fmt::{Debug, Formatter, Result};
 use core::mem::MaybeUninit;
 use lazy_static::lazy_static;
+use memoffset::offset_of;
+use pretty_hex::*;
 
 lazy_static! {
     static ref SEQ_NUM: SpinLock<u64> = SpinLock::new(0);
+}
+
+impl Debug for snp_report_req {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "snp_report_req {{\n").unwrap();
+
+        write!(f, "offset {:02x}\n", offset_of!(snp_report_req, user_data)).unwrap();
+
+        write!(f, "offset {:02x}\n", offset_of!(snp_report_req, vmpl)).unwrap();
+        write!(f, "offset {:02x}\n", offset_of!(snp_report_req, rsvd)).unwrap();
+
+        write!(f, "vmpl {}", self.vmpl);
+        write!(f, "sizeof {}", core::mem::size_of::<snp_report_req>());
+        write!(f, "rsvd {:#?}", self.rsvd)
+    }
+}
+
+impl Debug for snp_guest_msg_hdr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        // authtag
+        write!(f, "snp_guest_msg_hdr {{\n").unwrap();
+
+        write!(f, "offset {}\n", offset_of!(snp_guest_msg_hdr, authtag)).unwrap();
+        write!(f, " - authtag\n").unwrap();
+        for (i, b) in self.authtag.iter().enumerate() {
+            write!(f, "{:02x} ", b).unwrap();
+            if (i + 1) % 16 == 0 {
+                write!(f, "\n").unwrap();
+            }
+        }
+
+        unsafe {
+            // msg_seqno
+            write!(
+                f,
+                "offset {:02x}\n",
+                offset_of!(snp_guest_msg_hdr, msg_seqno)
+            )
+            .unwrap();
+            write!(
+                f,
+                " - msg_seqno {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.msg_seqno))
+            )
+            .unwrap();
+
+            // algo
+            write!(f, "offset {:02x}\n", offset_of!(snp_guest_msg_hdr, algo)).unwrap();
+            write!(
+                f,
+                " - algo {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.algo))
+            )
+            .unwrap();
+
+            // hdr_version
+            write!(
+                f,
+                "offset {:02x}\n",
+                offset_of!(snp_guest_msg_hdr, hdr_version)
+            )
+            .unwrap();
+            write!(
+                f,
+                " - hdr_version {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.hdr_version))
+            )
+            .unwrap();
+
+            // hdr_sz
+            write!(f, "offset {:02x}\n", offset_of!(snp_guest_msg_hdr, hdr_sz)).unwrap();
+            write!(
+                f,
+                " - hdr_sz {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.hdr_sz))
+            )
+            .unwrap();
+
+            // msg_type
+            write!(
+                f,
+                "offset {:02x}\n",
+                offset_of!(snp_guest_msg_hdr, msg_type)
+            )
+            .unwrap();
+            write!(
+                f,
+                " - msg_type {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.msg_type))
+            )
+            .unwrap();
+
+            // msg_version
+            write!(
+                f,
+                "offset {:02x}\n",
+                offset_of!(snp_guest_msg_hdr, msg_version)
+            )
+            .unwrap();
+            write!(
+                f,
+                " - msg_version {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.msg_version))
+            )
+            .unwrap();
+
+            // msg_sz
+            write!(f, "offset {:02x}\n", offset_of!(snp_guest_msg_hdr, msg_sz)).unwrap();
+            write!(
+                f,
+                " - msg_sz {}\n",
+                core::ptr::read_unaligned(core::ptr::addr_of!(self.msg_sz))
+            )
+            .unwrap();
+
+            // msg_vmpck
+            write!(
+                f,
+                "offset {:02x}\n",
+                offset_of!(snp_guest_msg_hdr, msg_vmpck)
+            )
+            .unwrap();
+            write!(f, " - msg_vmpck {}\n", self.msg_vmpck).unwrap();
+        }
+        write!(f, "}}\n")
+    }
+}
+
+unsafe fn hexdumper<T>(buf: T, header: &str, sz: usize) {
+    let buf_slice = core::slice::from_raw_parts(&buf as *const T as *const u8, sz);
+    let dump = buf_slice.hex_dump();
+    prints!("{}\n", header);
+    prints!("{:?}\n", dump);
+    prints!("--- end ---\n");
 }
 
 pub fn get_attestation_report() {
