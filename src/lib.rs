@@ -18,7 +18,6 @@
 // overwrite _start().
 #![no_main]
 
-
 pub mod bindings;
 /// Initialize BIOS for the guest
 pub mod bios;
