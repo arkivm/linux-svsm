@@ -97,9 +97,9 @@ pub struct SnpSecrets {
     gosvw: [u8; 16],
 
     pub vmpck0: [u8; 32],
-    vmpck1: [u8; 32],
-    vmpck2: [u8; 32],
-    vmpck3: [u8; 32],
+    pub vmpck1: [u8; 32],
+    pub vmpck2: [u8; 32],
+    pub vmpck3: [u8; 32],
 
     os_reserved: [u8; 96],
 
