@@ -1018,6 +1018,7 @@ use core::fmt::{Debug, Formatter, Result};
 use core::mem::MaybeUninit;
 use lazy_static::lazy_static;
 use memoffset::offset_of;
+#[cfg(feature="debug")]
 use pretty_hex::*;
 
 lazy_static! {
@@ -1033,8 +1034,8 @@ impl Debug for snp_report_req {
         write!(f, "offset {:02x}\n", offset_of!(snp_report_req, vmpl)).unwrap();
         write!(f, "offset {:02x}\n", offset_of!(snp_report_req, rsvd)).unwrap();
 
-        write!(f, "vmpl {}", self.vmpl);
-        write!(f, "sizeof {}", core::mem::size_of::<snp_report_req>());
+        write!(f, "vmpl {}", self.vmpl).unwrap();
+        write!(f, "sizeof {}", core::mem::size_of::<snp_report_req>()).unwrap();
         write!(f, "rsvd {:#?}", self.rsvd)
     }
 }
@@ -1150,6 +1151,7 @@ impl Debug for snp_guest_msg_hdr {
     }
 }
 
+#[cfg(feature="debug")]
 unsafe fn hexdumper<T>(buf: T, header: &str, sz: usize) {
     let buf_slice = core::slice::from_raw_parts(&buf as *const T as *const u8, sz);
     let dump = buf_slice.hex_dump();
@@ -1158,17 +1160,23 @@ unsafe fn hexdumper<T>(buf: T, header: &str, sz: usize) {
     prints!("--- end ---\n");
 }
 
+
+#[cfg(not(feature="debug"))]
+unsafe fn hexdumper<T>(_buf: T, _header: &str, _sz: usize) {
+}
+
 pub fn get_attestation_report() {
-    prints!("Trying to get attestation report\n");
+
+    prints!("Getting attestation report for vmpl 0\n");
 
     let seq_num = match SEQ_NUM.lock().checked_add(1) {
         Some(n) => n,
-        None => 0,
+        None => panic!("SEQ_NUM overflow!\n"),
     };
 
     let mut req = unsafe { MaybeUninit::<snp_report_req>::zeroed().assume_init() };
     let mut msg = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
-    let mut msg_resp = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
+    let msg_resp = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
 
     let req_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg as *const _);
     let resp_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg_resp as *const _);
@@ -1209,8 +1217,11 @@ pub fn get_attestation_report() {
 
         let key = *(&(*svsm_secrets).vmpck0 as *const [u8; 32]);
 
-        let key_hex = key.as_slice().hex_dump();
-        prints!("Enc key: {:?}\n", key_hex);
+        #[cfg(feature="debug")]
+        {
+            let key_hex = key.as_slice().hex_dump();
+            prints!("Enc key: {:?}\n", key_hex);
+        }
 
         ret = wc_AesGcmSetKey(&mut enc, &key as *const _ as *const u8, 32);
 
@@ -1220,9 +1231,11 @@ pub fn get_attestation_report() {
         let mut iv = [0u8; 12];
         iv[0] = seq_num as u8;
 
-        let iv_hex = iv.as_slice().hex_dump();
-        prints!("IV: {:?}\n", iv_hex);
-
+        #[cfg(feature="debug")]
+        {
+            let iv_hex = iv.as_slice().hex_dump();
+            prints!("IV: {:?}\n", iv_hex);
+        }
         let mut auth_tag = [0u8; AES_BLOCK_SIZE as usize];
 
         let mut aad = [0u8; AAD_LEN as usize];
@@ -1237,9 +1250,11 @@ pub fn get_attestation_report() {
             AAD_LEN as usize,
         );
 
-        let aad_hex = aad.as_slice().hex_dump();
-
-        prints!("AAD: {:?}\n", aad_hex);
+        #[cfg(feature="debug")]
+        {
+            let aad_hex = aad.as_slice().hex_dump();
+            prints!("AAD: {:?}\n", aad_hex);
+        }
 
         hexdumper::<snp_report_req>(req, "Payload", core::mem::size_of::<snp_report_req>());
 
@@ -1317,7 +1332,7 @@ pub fn get_attestation_report() {
             prints!("Failed! ret code {:x}\n", ret);
 
             //prints!("resp {:#x?}\n", msg_resp);
-            //vc_terminate_unhandled_vc();
+            vc_terminate_unhandled_vc();
         }
 
         (*ghcb).clear();
@@ -1325,8 +1340,10 @@ pub fn get_attestation_report() {
         // unshare the response page to access
         //pgtable_make_pages_private(resp_va, 4096);
         let msg_resp_hdr = msg_resp.hdr;
-        let mut sev_report: [u8; 4096] = MaybeUninit::<[u8; 4096]>::zeroed().assume_init();
+        let mut sev_report: msg_report_resp =
+            MaybeUninit::<msg_report_resp>::zeroed().assume_init();
 
+        #[cfg(feature="debug")]
         prints!("resp {:#x?}\n", msg_resp_hdr);
 
         let resp_seqno = msg_resp_hdr.msg_seqno;
@@ -1375,13 +1392,38 @@ pub fn get_attestation_report() {
 
         assert_eq!(ret, 0, "AesGcmDecrypt failed with {}", ret);
 
-        hexdumper::<[u8; 4096]>(
+        hexdumper::<msg_report_resp>(
             sev_report,
             "Response: After dec",
             msg_resp.hdr.msg_sz as usize,
         );
 
+        let report = sev_report.report;
+        prints!("Report {:#?}", report);
+
+        let _seq_num = match SEQ_NUM.lock().checked_add(1) {
+            Some(n) => n,
+            None => panic!("SEQ_NUM overflow!\n"),
+        };
+
         // TODO:
         // - Save it to a _defined_ nvindex in the TPM's NVRAM
+    }
+}
+
+impl Debug for attestation_report {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        write!(f, "attestation_report {{\n").unwrap();
+
+        unsafe {
+            write!(f, "\tversion {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.version))).unwrap();
+            write!(f, "\tguest_svn {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.guest_svn))).unwrap();
+            write!(f, "\tpolicy {:x}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.policy))).unwrap();
+            write!(f, "\tvmpl {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.vmpl))).unwrap();
+            write!(f, "\tsignature_algo {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.signature_algo))).unwrap();
+            write!(f, "\tplatform_info {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.platform_info))).unwrap();
+            write!(f, "\tflags {}\n", core::ptr::read_unaligned(core::ptr::addr_of!(self.flags))).unwrap();
+        }
+        write!(f, "}}\n")
     }
 }
