@@ -1170,8 +1170,16 @@ pub fn get_attestation_report() {
     let mut msg = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
     let mut msg_resp = unsafe { MaybeUninit::<snp_guest_msg>::zeroed().assume_init() };
 
+    let req_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg as *const _);
+    let resp_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg_resp as *const _);
+
+    // From §4.1.7, https://developer.amd.com/wp-content/resources/56421.pdf
+    // make both the request and response page as shared
+    pgtable_make_pages_shared(req_va, 4096);
+    pgtable_make_pages_shared(resp_va, 4096);
+
     // request for VMPL level
-    req.vmpl = 2;
+    req.vmpl = 0;
 
     let report_req_sz = core::mem::size_of::<snp_report_req>() as u16;
 
@@ -1186,7 +1194,7 @@ pub fn get_attestation_report() {
     hdr.msg_type = msg_type_SNP_MSG_REPORT_REQ as u8;
     hdr.msg_version = 1;
     hdr.msg_seqno = seq_num;
-    hdr.msg_vmpck = 0;
+    hdr.msg_vmpck = req.vmpl as u8;
     hdr.msg_sz = report_req_sz;
 
     unsafe {
@@ -1199,21 +1207,21 @@ pub fn get_attestation_report() {
         let svsm_secrets_va = pgtable_pa_to_va(PhysAddr::new(svsm_secrets_page));
         let svsm_secrets: *const SnpSecrets = svsm_secrets_va.as_ptr();
 
-        let _vmpck0_key = *(&(*svsm_secrets).vmpck0 as *const [u8; 32]);
+        let key = *(&(*svsm_secrets).vmpck0 as *const [u8; 32]);
 
-        //prints!("{:#?}\n", vmpck0_key);
+        let key_hex = key.as_slice().hex_dump();
+        prints!("Enc key: {:?}\n", key_hex);
 
-        ret = wc_AesGcmSetKey(
-            &mut enc,
-            &(*svsm_secrets).vmpck0 as *const _ as *const u8,
-            32,
-        );
+        ret = wc_AesGcmSetKey(&mut enc, &key as *const _ as *const u8, 32);
 
         assert_eq!(ret, 0, "AesGcmSetKey failed with ret {}", ret);
 
         // 16 bytes IV
-        let mut iv = [0u64; 2];
-        iv[0] = seq_num;
+        let mut iv = [0u8; 12];
+        iv[0] = seq_num as u8;
+
+        let iv_hex = iv.as_slice().hex_dump();
+        prints!("IV: {:?}\n", iv_hex);
 
         let mut auth_tag = [0u8; AES_BLOCK_SIZE as usize];
 
@@ -1229,46 +1237,75 @@ pub fn get_attestation_report() {
             AAD_LEN as usize,
         );
 
-        //prints!("AAD {:#?}\n", aad);
+        let aad_hex = aad.as_slice().hex_dump();
 
-        let ret = wc_AesGcmEncrypt(
+        prints!("AAD: {:?}\n", aad_hex);
+
+        hexdumper::<snp_report_req>(req, "Payload", core::mem::size_of::<snp_report_req>());
+
+        hexdumper::<snp_guest_msg>(
+            msg,
+            "Before enc",
+            core::mem::size_of::<snp_guest_msg_hdr>() + report_req_sz as usize,
+        );
+
+        ret = wc_AesGcmEncrypt(
             &mut enc,
             &mut msg.payload as *mut _ as *mut u8, // [out] cipher text
             &req as *const _ as *const u8,         // [in] plain text
             report_req_sz as u32,                  // plain text size
             &mut iv as *mut _ as *mut u8,          // iv
-            core::mem::size_of::<[u64; 2]>() as u32, // sizeof(iv)
-            &mut auth_tag as *mut u8,              // authtag
+            12,
+            //core::mem::size_of::<[u64; 2]>() as u32, // sizeof(iv)
+            &mut auth_tag as *mut u8, // authtag
             core::mem::size_of::<[u8; AES_BLOCK_SIZE as usize]>() as u32, // sizeof authtag
-            &mut aad as *const u8,                 // aad
+            &mut aad as *const u8,    // aad
             core::mem::size_of::<[u8; AAD_LEN as usize]>() as u32, // sizeof(aad)
         );
 
         assert_eq!(ret, 0, "AesGcmEncrypt failed with {}", ret);
 
-        // copyt the authtag to header
+        // copy back the authtag to header
         core::ptr::copy_nonoverlapping(
             &auth_tag as *const _ as *const u8,
             &mut msg.hdr.authtag as *mut _ as *mut u8,
             AES_BLOCK_SIZE as usize,
         );
 
-        let hdr: &snp_guest_msg_hdr = &msg.hdr;
+        /*
+        let mut req_orig = MaybeUninit::<snp_report_req>::zeroed().assume_init();
 
-        prints!("hdr {:#x?}\n", hdr);
+        ret = wc_AesGcmDecrypt(
+            &mut enc,
+            &mut req_orig as *mut _ as *mut u8, // [out] cipher text
+            &msg.payload as *const _ as *const u8, // [in] plain text
+            report_req_sz as u32,               // plain text size
+            &iv as *const _ as *const u8,       // iv
+            12,
+            &auth_tag as *const _ as *const u8,
+            AES_BLOCK_SIZE as u32,
+            &aad as *const u8,                                     // aad
+            core::mem::size_of::<[u8; AAD_LEN as usize]>() as u32, // sizeof(aad)
+        );
+
+        assert_eq!(ret, 0, "AesGcmDecrypt failed with {}", ret);
+
+        prints!("req_orig {:#?}\n", req_orig);
+
+        */
+
+        hexdumper::<snp_guest_msg>(
+            msg,
+            "After enc",
+            core::mem::size_of::<snp_guest_msg_hdr>() + report_req_sz as usize,
+        );
 
         let ghcb: *mut Ghcb = vc_get_ghcb();
-
-        let req_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg as *const _);
-        let resp_va: VirtAddr = VirtAddr::from_ptr::<snp_guest_msg>(&msg_resp as *const _);
 
         let req_pa: PhysAddr = pgtable_va_to_pa(req_va);
         let resp_pa: PhysAddr = pgtable_va_to_pa(resp_va);
 
-        // From §4.1.7, https://developer.amd.com/wp-content/resources/56421.pdf
-        // make both the request and response page as shared
-        pgtable_make_pages_shared(req_va, 4096);
-        pgtable_make_pages_shared(resp_va, 4096);
+        (*ghcb).clear();
 
         // perform guest request 0x80000011
         vc_perform_vmgexit(ghcb, GHCB_GUEST_REQUEST, req_pa.as_u64(), resp_pa.as_u64());
@@ -1283,9 +1320,68 @@ pub fn get_attestation_report() {
             //vc_terminate_unhandled_vc();
         }
 
+        (*ghcb).clear();
+
+        // unshare the response page to access
+        //pgtable_make_pages_private(resp_va, 4096);
+        let msg_resp_hdr = msg_resp.hdr;
+        let mut sev_report: [u8; 4096] = MaybeUninit::<[u8; 4096]>::zeroed().assume_init();
+
+        prints!("resp {:#x?}\n", msg_resp_hdr);
+
+        let resp_seqno = msg_resp_hdr.msg_seqno;
+        let req_seqno = msg.hdr.msg_seqno;
+
+        if resp_seqno != (req_seqno + 1) {
+            prints!(
+                "Bad response! resp_seqno {}, req_seqno {}\n",
+                resp_seqno,
+                req_seqno
+            );
+        }
+
+        let resp_sz = msg_resp_hdr.msg_sz;
+
+        if resp_sz + AES_BLOCK_SIZE as u16 > 4096 {
+            prints!("Bad response! greater than 4096 bytes!\n");
+        }
+
+        iv[0] = resp_seqno as u8;
+
+        core::ptr::copy_nonoverlapping(
+            &msg_resp.hdr.algo as *const _ as *const u8,
+            &mut aad as *mut _ as *mut u8,
+            AAD_LEN as usize,
+        );
+
+        hexdumper::<snp_guest_msg>(
+            msg_resp,
+            "Response: Before dec",
+            core::mem::size_of::<snp_guest_msg_hdr>() + msg_resp.hdr.msg_sz as usize,
+        );
+
+        ret = wc_AesGcmDecrypt(
+            &mut enc,
+            &mut sev_report as *mut _ as *mut u8,
+            &msg_resp.payload as *const _ as *const u8,
+            (msg_resp.hdr.msg_sz as u16 + 0 as u16) as u32,
+            &iv as *const _ as *const u8,
+            12,
+            &msg_resp.hdr.authtag as *const _ as *const u8,
+            AES_BLOCK_SIZE as u32,
+            &aad as *const u8,
+            core::mem::size_of::<[u8; AAD_LEN as usize]>() as u32,
+        );
+
+        assert_eq!(ret, 0, "AesGcmDecrypt failed with {}", ret);
+
+        hexdumper::<[u8; 4096]>(
+            sev_report,
+            "Response: After dec",
+            msg_resp.hdr.msg_sz as usize,
+        );
+
         // TODO:
-        // - Decrypt the payload
-        // - Parse the attestation report
         // - Save it to a _defined_ nvindex in the TPM's NVRAM
     }
 }
