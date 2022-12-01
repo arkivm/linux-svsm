@@ -1183,6 +1183,9 @@ pub fn get_attestation_report() {
 
     // From §4.1.7, https://developer.amd.com/wp-content/resources/56421.pdf
     // make both the request and response page as shared
+    // FIXME: We are making it shared before encrypting the buffer. There is a window of attack.
+    // Fix it by constructing everything on a non-shared page, then copy the encrypted data to the
+    // shared page.
     pgtable_make_pages_shared(req_va, 4096);
     pgtable_make_pages_shared(resp_va, 4096);
 
